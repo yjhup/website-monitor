@@ -14,11 +14,13 @@ if [ -n "$DB_ID" ]; then
   echo "    D1 数据库已存在：$DB_ID"
 else
   echo "    创建 D1 数据库..."
-  DB_CREATE="$(npx wrangler d1 create "$DB_NAME" --json)"
-  DB_ID="$(echo "$DB_CREATE" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);process.stdout.write((j[0]||j).database_id||'')})")"
+  # 注意：wrangler d1 create 不支持 --json，从文本输出解析 database_id
+  DB_CREATE="$(npx wrangler d1 create "$DB_NAME")"
+  DB_ID="$(echo "$DB_CREATE" | sed -n 's/.*database_id *= *"\([^"]*\)".*/\1/p' | head -n1)"
   if [ -z "$DB_ID" ]; then
-    echo "    [警告] 无法从 JSON 输出解析 database_id，尝试从文本输出解析"
-    DB_ID="$(echo "$DB_CREATE" | sed -n 's/.*database_id *= *"\([^"]*\)".*/\1/p' | head -n1)"
+    echo "    [错误] 未能从输出解析 database_id："
+    echo "$DB_CREATE"
+    exit 1
   fi
   echo "    已创建：$DB_ID"
 fi
