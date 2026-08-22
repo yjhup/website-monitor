@@ -2,7 +2,6 @@
 
 export interface Env {
   DB: D1Database;
-  KV: KVNamespace;
   // 多用户列表："alice:password123,bob:secret456"
   USERS: string;
 }
@@ -23,8 +22,15 @@ export interface MonitorRow {
   interval_minutes: number;
   last_checked_at: number;
   last_change_at: number | null;
+  last_hash: string | null; // 最近一次内容哈希（变化检测基线）
   enabled: number;
   created_at: number;
+}
+
+export interface SessionRow {
+  token_hash: string; // 会话令牌的 SHA-256（不存明文）
+  user_id: string;
+  expires_at: number;
 }
 
 export interface NotificationRow {

@@ -2,6 +2,7 @@
 
 import { parse } from 'node-html-parser';
 import type { Env, MonitorRow, NotificationRow, WebhookConfig, ResendConfig } from './types';
+import { sha256Hex } from './hash';
 
 export interface CheckResult {
   changed: boolean;
@@ -22,11 +23,6 @@ function extractSelector(html: string, selector: string): string {
   const els = root.querySelectorAll(selector);
   if (els.length === 0) return '';
   return els.map((el) => el.text.replace(/\s+/g, ' ').trim()).join('\n').trim();
-}
-
-async function sha256Hex(text: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -53,23 +49,26 @@ export async function checkMonitor(env: Env, monitor: MonitorRow): Promise<Check
     const html = await res.text();
     const content = monitor.selector ? extractSelector(html, monitor.selector) : normalizeText(html);
     const hash = await sha256Hex(content);
-    const key = `hash:${monitor.id}`;
-    const prev = await env.KV.get(key);
+    // 基线哈希直接存在 D1 的 monitors.last_hash，不使用 KV
+    const prev = monitor.last_hash;
 
     let changed = false;
     if (prev && prev !== hash) {
       changed = true;
       await notifyAll(env, monitor);
-      await env.DB.prepare('UPDATE monitors SET last_checked_at = ?, last_change_at = ? WHERE id = ?')
-        .bind(Date.now(), Date.now(), monitor.id)
+      await env.DB.prepare(
+        'UPDATE monitors SET last_checked_at = ?, last_change_at = ?, last_hash = ? WHERE id = ?'
+      )
+        .bind(Date.now(), Date.now(), hash, monitor.id)
         .run();
     } else {
-      await env.DB.prepare('UPDATE monitors SET last_checked_at = ? WHERE id = ?')
-        .bind(Date.now(), monitor.id)
+      await env.DB.prepare(
+        'UPDATE monitors SET last_checked_at = ?, last_hash = ? WHERE id = ?'
+      )
+        .bind(Date.now(), hash, monitor.id)
         .run();
     }
 
-    await env.KV.put(key, hash);
     return { changed, hash };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -16,11 +16,8 @@ binding = "DB"
 database_name = "website-monitor-db"
 database_id = "replace-with-your-database-id"
 
-# ---------- KV 命名空间 ----------
-# id 部署前需要替换成真实值（见 README），GitHub Actions 会自动填充。
-[[kv_namespaces]]
-binding = "KV"
-id = "replace-with-your-kv-id"
+# 说明：所有数据（用户、监测目标、通知设置、内容哈希、登录会话）均存储在 D1，
+# 不依赖 KV，以避开 KV 免费版每天读写次数限制。
 
 # ---------- 定时任务 ----------
 # 每分钟触发一次，代码内部会按每个监测目标的“间隔”决定是否真正检查。

@@ -96,7 +96,6 @@ api.delete('/monitors/:id', async (c) => {
     .bind(id, user)
     .run();
   if (res.meta.changes === 0) return c.json({ error: '监测目标不存在' }, 404);
-  await c.env.KV.delete(`hash:${id}`);
   return c.json({ ok: true });
 });
 

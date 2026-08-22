@@ -5,7 +5,7 @@ import type { Context, Next } from 'hono';
 import type { AppEnv, Env } from './types';
 import { api } from './api';
 import { verifyPassword, findUser, createSession, destroySession, getTokenFromCookie } from './auth';
-import { initDb } from './db';
+import { initDb, cleanupExpiredSessions } from './db';
 import { checkDueMonitors } from './checker';
 import { FRONTEND_HTML } from './frontend';
 
@@ -62,6 +62,7 @@ app.notFound((c) => c.json({ error: 'Not Found' }, 404));
 // ---------- Cron 定时任务：每分钟触发，按各目标间隔执行检查 ----------
 async function scheduled(env: Env): Promise<void> {
   await initDb(env);
+  await cleanupExpiredSessions(env);
   await checkDueMonitors(env);
 }
 
