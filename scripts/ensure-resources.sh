@@ -9,7 +9,17 @@ TOML="wrangler.toml"
 
 echo "==> 检查 D1 数据库：$DB_NAME"
 DB_LIST="$(npx wrangler d1 list --json 2>/dev/null)"
-DB_ID="$(echo "$DB_LIST" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const j=JSON.parse(d);const it=(j||[]).find(x=>x.name==='$DB_NAME');if(it)process.stdout.write(it.database_id)})")"
+# 注意：d1 list --json 返回的是 Cloudflare API 原始 JSON，ID 字段名为 uuid（不是 database_id）
+DB_ID="$(echo "$DB_LIST" | node -e "
+let d='';
+process.stdin.on('data',c=>d+=c).on('end',()=>{
+  let j;
+  try { j = JSON.parse(d); } catch (e) { process.exit(0); }
+  const arr = Array.isArray(j) ? j : (j && Array.isArray(j.result) ? j.result : []);
+  const it = arr.find((x) => x && x.name === '$DB_NAME');
+  if (it) process.stdout.write(String(it.uuid || it.database_id || ''));
+})"
+)"
 if [ -n "$DB_ID" ]; then
   echo "    D1 数据库已存在：$DB_ID"
 else
