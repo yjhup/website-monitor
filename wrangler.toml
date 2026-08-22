@@ -1,0 +1,28 @@
+name = "website-monitor"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# 每个账号一对 “用户名:密码”，多个用户用英文逗号分隔，例如：
+#   alice:password123,bob:secret456
+# 部署时建议通过 Secret 设置（生产环境）或 .dev.vars（本地开发），
+# 见 README「环境变量」一节。
+# [vars]
+# USERS = "alice:password123"
+
+# ---------- D1 数据库 ----------
+# database_id 部署前需要替换成真实值（见 README），GitHub Actions 会自动填充。
+[[d1_databases]]
+binding = "DB"
+database_name = "website-monitor-db"
+database_id = "replace-with-your-database-id"
+
+# ---------- KV 命名空间 ----------
+# id 部署前需要替换成真实值（见 README），GitHub Actions 会自动填充。
+[[kv_namespaces]]
+binding = "KV"
+id = "replace-with-your-kv-id"
+
+# ---------- 定时任务 ----------
+# 每分钟触发一次，代码内部会按每个监测目标的“间隔”决定是否真正检查。
+[triggers]
+crons = ["* * * * *"]
