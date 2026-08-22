@@ -2,9 +2,9 @@
 
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import type { AppEnv, MonitorRow, NotificationRow, ResendConfig } from './types';
+import type { AppEnv, MonitorRow, NotificationRow, ResendConfig, WebhookConfig } from './types';
 import { getCurrentUser } from './auth';
-import { checkMonitor } from './checker';
+import { checkMonitor, sendTestNotification } from './checker';
 
 export const api = new Hono<AppEnv>();
 
@@ -186,6 +186,50 @@ api.put('/notifications', async (c) => {
     }
   }
 
+  return c.json({ ok: true });
+});
+
+// ---------- 通知测试 ----------
+api.post('/notifications/test', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: '请求体无效' }, 400);
+  const type = String(body.type || '');
+  if (type !== 'webhook' && type !== 'resend') {
+    return c.json({ error: 'type 必须是 webhook 或 resend' }, 400);
+  }
+
+  // 读取已保存的配置，用于补全表单中留空/掩码的字段
+  const { results } = await c.env.DB.prepare(
+    'SELECT * FROM notification_settings WHERE user_id = ?'
+  )
+    .bind(user)
+    .all<NotificationRow>();
+  let savedWebhook: WebhookConfig | null = null;
+  let savedResend: ResendConfig | null = null;
+  for (const row of results ?? []) {
+    const cfg = JSON.parse(row.config);
+    if (row.type === 'webhook') savedWebhook = cfg;
+    if (row.type === 'resend') savedResend = cfg;
+  }
+
+  let webhook: WebhookConfig | undefined;
+  let resend: ResendConfig | undefined;
+  if (type === 'webhook') {
+    const url = body.webhook?.url ? String(body.webhook.url).trim() : (savedWebhook?.url || '');
+    if (!url) return c.json({ error: '请先填写 Webhook 地址' }, 400);
+    webhook = { url };
+  } else {
+    const from = body.resend?.from ? String(body.resend.from).trim() : (savedResend?.from || '');
+    const to = body.resend?.to ? String(body.resend.to).trim() : (savedResend?.to || '');
+    let apiKey = body.resend?.apiKey ? String(body.resend.apiKey).trim() : (savedResend?.apiKey || '');
+    // 掩码值（含 *）视为未填写，回退到已保存的 key
+    if (apiKey.includes('*')) apiKey = savedResend?.apiKey || '';
+    resend = { apiKey, from, to };
+  }
+
+  const result = await sendTestNotification(type, { webhook, resend });
+  if (!result.ok) return c.json({ ok: false, error: result.error }, 400);
   return c.json({ ok: true });
 });
 

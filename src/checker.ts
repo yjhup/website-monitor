@@ -10,6 +10,79 @@ export interface CheckResult {
   error?: string;
 }
 
+export interface TestResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** 发送一条“测试通知”，校验 Webhook / Resend 配置是否可用（返回详细错误） */
+export async function sendTestNotification(
+  type: 'webhook' | 'resend',
+  cfg: { webhook?: WebhookConfig; resend?: ResendConfig }
+): Promise<TestResult> {
+  try {
+    if (type === 'webhook') {
+      const url = cfg.webhook?.url;
+      if (!url) return { ok: false, error: '请先填写 Webhook 地址' };
+      const payload = {
+        event: 'test',
+        message: '这是一条测试通知，说明你的 Webhook 配置正确。',
+        changedAt: new Date().toISOString(),
+      };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'WebsiteMonitor/1.0' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        return { ok: false, error: `Webhook 返回 HTTP ${res.status}${body ? '：' + body.slice(0, 200) : ''}` };
+      }
+      return { ok: true };
+    }
+
+    if (type === 'resend') {
+      const { apiKey, from, to } = cfg.resend ?? {};
+      if (!apiKey) return { ok: false, error: '请先填写 Resend API Key' };
+      if (!from || !to) return { ok: false, error: '请先填写发件邮箱与收件邮箱' };
+      const toList = to.split(',').map((s) => s.trim()).filter(Boolean);
+      if (toList.length === 0) return { ok: false, error: '请至少填写一个收件邮箱' };
+
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from,
+          to: toList,
+          subject: '【网站监测】测试通知',
+          html: `
+            <div style="font-family:-apple-system,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#f6f8fa;border-radius:8px;">
+              <h2 style="color:#1f6feb;margin-top:0;">🛎️ 这是一封测试邮件</h2>
+              <p>如果你收到这封邮件，说明你的 <strong>Resend 通知配置正确</strong>，网站内容发生变化时就会收到此类提醒。</p>
+              <p style="color:#57606a;font-size:13px;">本邮件由 Website Monitor 自动发送，请勿直接回复。</p>
+            </div>`,
+        }),
+      });
+      const text = await res.text().catch(() => '');
+      if (!res.ok) {
+        let msg = `Resend 返回 HTTP ${res.status}`;
+        try {
+          const j = JSON.parse(text);
+          if (j.message) msg += '：' + String(j.message).slice(0, 300);
+        } catch {
+          /* 忽略非 JSON 响应 */
+        }
+        return { ok: false, error: msg };
+      }
+      return { ok: true };
+    }
+
+    return { ok: false, error: '未知的通知类型' };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** 去除 script/style 等噪声后取纯文本，并压缩空白 */
 function normalizeText(html: string): string {
   const root = parse(html);

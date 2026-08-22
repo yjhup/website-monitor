@@ -10,6 +10,7 @@
   - **Webhook**：变化时向你的地址发送 POST JSON 请求，可对接钉钉/企业微信机器人、自建服务等
   - **Resend 邮件**：自行填写 API Key、发件邮箱、收件邮箱，直接发送邮件
 - 👥 **多用户**：通过环境变量配置多组「用户名:密码」，各用户的监测目标与通知设置相互隔离
+- 🧪 **通知测试**：配置好 Webhook / Resend 后可一键「发送测试」，立即验证配置是否可用（失败会给出具体原因）
 - 🖥️ **自带前端页面**：登录后可视化地管理监测目标与通知方式，支持手动“立即检查”
 - ☁️ **纯 Cloudflare 技术栈**：Workers + D1（全部数据）+ Cron（定时检查）
 - 🚀 **GitHub Actions 自动部署**：推送代码即自动创建并绑定 D1、写入密钥、初始化数据库、部署 Worker
@@ -215,7 +216,58 @@ git push -u origin main
      ```
 
    - Resend：在 [resend.com](https://resend.com) 注册后创建 API Key（`re_xxx`），并**验证你的发件域名**（添加 DNS 记录），发件邮箱需使用该域名下的地址；收件邮箱可填多个（逗号分隔）
-4. **手动检查**：点击某目标行中的「检查」，立即触发一次抓取对比，无需等待定时任务
+4. **测试通知**：填好 Webhook / Resend 配置后，点击对应卡片里的「发送测试」，立即向该地址/邮箱发送一条测试通知。成功显示绿色提示；失败会给出具体原因（如 `Webhook 返回 HTTP 404`、Resend 返回的错误信息）。测试后记得点「保存通知设置」。
+5. **手动检查**：点击某目标行中的「检查」，立即触发一次抓取对比，无需等待定时任务
+
+## 🔌 Webhook 配置说明（对接你自己的接口）
+
+**本工具发送的数据格式是固定的**（变化时）：
+
+```json
+{
+  "event": "website_changed",
+  "monitor": { "id": "...", "name": "学校教务处通知", "url": "https://..." },
+  "changedAt": "2026-08-22T08:00:00.000Z"
+}
+```
+
+点击「发送测试」时发送：
+
+```json
+{
+  "event": "test",
+  "message": "这是一条测试通知，说明你的 Webhook 配置正确。",
+  "changedAt": "2026-08-22T08:00:00.000Z"
+}
+```
+
+**如果我要对接的接口期望的是别的字段（例如 `{"to":"boss@example.com","subject":"订单通知","text":"..."}`），该怎么配置？**
+
+本工具不能直接改成任意格式，但在中间加一层“转换”即可：收到本工具发来的 JSON 后，重新拼成目标接口需要的字段再转发。下面用 Vercel Serverless Function 演示（同样适用于 Cloudflare Worker 或任何 Node 服务）：
+
+```js
+// 例如保存为 vercel/api/webhook.js，部署到 Vercel 后填入得到的地址
+export default async function handler(req) {
+  const { event, monitor, changedAt } = JSON.parse(req.body);
+  // 目标接口期望的格式（示例：按你的接口字段拼装）
+  await fetch('https://<your-domain>.vercel.app/api/你真实的接口地址', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      to: 'boss@example.com',
+      subject: `【${monitor?.name || '网站监测'}】检测到更新`,
+      text: `网页 ${monitor?.url} 于 ${changedAt} 发生变化`,
+    }),
+  });
+  return new Response('ok');
+}
+```
+
+把「Webhook 地址」填成转换层地址（如 `https://<your-domain>.vercel.app/api/webhook`）即可。常用接收端速查：
+
+- **钉钉 / 企业微信 / 飞书机器人**：直接把机器人 Webhook 地址填进来即可（飞书机器人需先建群，在设置里添加自定义机器人）
+- **webhook.site / request.bin**：填地址后打开页面即可看到收到的 JSON，适合调试
+- **只关心“有没有更新”的自建服务**：直接消费 `event` 字段即可
 
 ## ❓ 常见问题
 

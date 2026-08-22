@@ -68,7 +68,25 @@ export const FRONTEND_HTML = `<!doctype html>
   .seg button { background: #fff; color: var(--text); border: 1px solid var(--border); }
   .seg button.active { background: var(--primary); color: #fff; border-color: var(--primary); }
   .inline-tip { color: var(--muted); font-size: 12px; margin-top: 6px; }
-  a { color: var(--primary); }
+  a { color: var(--primary); word-break: break-all; }
+  /* 可折叠的“数据格式”说明 */
+  details.tip-box { margin-top: 10px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; background: #f6f8fa; }
+  details.tip-box summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted); }
+  details.tip-box pre { background: #0d1117; color: #e6edf3; border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12px; margin: 8px 0 0; white-space: pre; }
+  /* 手机端适配：表格在卡片内横向滚动，避免撑破页面 */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .table-wrap table { min-width: 560px; }
+  @media (max-width: 640px) {
+    .container { padding: 16px 10px 48px; }
+    .card { padding: 14px; }
+    .header { flex-wrap: wrap; row-gap: 8px; }
+    h1 { font-size: 20px; }
+    .tabs { overflow-x: auto; white-space: nowrap; }
+    .modal-mask { padding: 20px 10px; }
+    button { padding: 8px 12px; }
+    th, td { padding: 8px 6px; }
+    details.tip-box pre { font-size: 11px; }
+  }
 </style>
 </head>
 <body>
@@ -183,7 +201,7 @@ function renderMonitors() {
         <h2 style="margin:0;">监测目标（\${state.monitors.length}）</h2>
         <button id="add-monitor">＋ 添加监测</button>
       </div>
-      <div style="margin-top:14px;">
+      <div class="table-wrap" style="margin-top:14px;">
         <table>
           <thead><tr><th>目标</th><th>间隔</th><th>最近检查</th><th>最近变化</th><th>状态</th><th></th></tr></thead>
           <tbody>\${rows || '<tr><td colspan="6" class="empty">还没有监测目标，点击右上角添加。</td></tr>'}</tbody>
@@ -201,7 +219,20 @@ function renderNotify() {
       <h2>Webhook 通知</h2>
       <label>Webhook 地址</label>
       <input type="url" id="wh-url" placeholder="https://example.com/hooks/xxx" value="\${esc(w.url || '')}" />
-      <p class="inline-tip">网站变化时，系统会向该地址发送 POST 请求，JSON 包含 event、monitor、changedAt 字段。</p>
+      <p class="inline-tip">网站变化时，系统会向该地址发送 POST 请求，可对接钉钉/企业微信/飞书机器人、自建服务等。若你的接口期望其它字段格式（如 to/subject/text），需要在中间加一层“转换”，详见 README。</p>
+      <details class="tip-box">
+        <summary>查看本工具发送的数据格式</summary>
+        <pre>{
+  "event": "website_changed",
+  "monitor": { "id": "...", "name": "学校教务处通知", "url": "https://..." },
+  "changedAt": "2026-08-22T08:00:00.000Z"
+}</pre>
+        <p class="muted">点击「发送测试」时 event 为 "test"，并附 message 字段。</p>
+      </details>
+      <div class="row" style="justify-content:flex-end;margin-top:10px;">
+        <button class="secondary" id="wh-test">发送测试</button>
+      </div>
+      <div id="wh-test-msg"></div>
     </div>
     <div class="card">
       <h2>Resend 邮件通知</h2>
@@ -212,6 +243,10 @@ function renderNotify() {
       <input type="email" id="re-from" placeholder="monitor@example.com" value="\${esc(r.from || '')}" />
       <label>收件邮箱（多个用英文逗号分隔）</label>
       <input type="email" id="re-to" placeholder="me@example.com, friend@example.com" value="\${esc(r.to || '')}" />
+      <div class="row" style="justify-content:flex-end;margin-top:10px;">
+        <button class="secondary" id="re-test">发送测试</button>
+      </div>
+      <div id="re-test-msg"></div>
     </div>
     <button id="save-notify" style="width:100%;">保存通知设置</button>
     <div id="notify-msg"></div>\`;
@@ -252,6 +287,27 @@ function bindTab() {
       msg.innerHTML = '<div class="ok">保存成功 ✅</div>';
       loadAll();
     };
+
+    // 通知测试按钮（webhook / resend）
+    const runTest = (btnSel, msgSel, type) => {
+      const btn = $(btnSel), msg = $(msgSel);
+      if (!btn) return;
+      btn.onclick = async () => {
+        msg.innerHTML = '';
+        btn.disabled = true; btn.textContent = '测试中…';
+        const body = {
+          type,
+          webhook: { url: $('#wh-url').value.trim() },
+          resend: { apiKey: $('#re-key').value.trim(), from: $('#re-from').value.trim(), to: $('#re-to').value.trim() },
+        };
+        const r = await api('/notifications/test', { method:'POST', body: JSON.stringify(body) });
+        const d = await r.json().catch(()=>({}));
+        btn.disabled = false; btn.textContent = '发送测试';
+        msg.innerHTML = d.ok ? '<div class="ok">测试成功 ✅</div>' : '<div class="err">' + esc(d.error || '测试失败') + '</div>';
+      };
+    };
+    runTest('#wh-test', '#wh-test-msg', 'webhook');
+    runTest('#re-test', '#re-test-msg', 'resend');
   }
 }
 
