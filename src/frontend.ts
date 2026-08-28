@@ -30,8 +30,12 @@ export const FRONTEND_HTML = `<!doctype html>
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px; margin-bottom: 20px; }
   .card h2 { font-size: 16px; margin: 0 0 14px; }
   label { display: block; font-weight: 600; margin: 12px 0 4px; font-size: 13px; }
-  input[type=text], input[type=password], input[type=number], input[type=url], input[type=email] {
+  input[type=text], input[type=password], input[type=number], input[type=url], input[type=email], select {
     width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; background: #fff;
+  }
+  textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: #fff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; resize: vertical; line-height: 1.5;
   }
   input:focus { outline: 2px solid var(--primary); outline-offset: -1px; border-color: transparent; }
   button {
@@ -214,20 +218,35 @@ function renderMonitors() {
 function renderNotify() {
   const w = state.notify.webhook || {};
   const r = state.notify.resend || {};
+  const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  const wm = (w.method || 'POST').toUpperCase();
   return \`
     <div class="card">
       <h2>Webhook 通知</h2>
-      <label>Webhook 地址</label>
+      <label>Webhook 通知 URL</label>
       <input type="url" id="wh-url" placeholder="https://example.com/hooks/xxx" value="\${esc(w.url || '')}" />
-      <p class="inline-tip">网站变化时，系统会向该地址发送 POST 请求，可对接钉钉/企业微信/飞书机器人、自建服务等。若你的接口期望其它字段格式（如 to/subject/text），需要在中间加一层“转换”，详见 README。</p>
+      <div class="row" style="align-items:flex-end;gap:12px;">
+        <div style="flex:0 0 170px;">
+          <label>请求方法</label>
+          <select id="wh-method">\${METHODS.map(m => '<option' + (wm === m ? ' selected' : '') + '>' + m + '</option>').join('')}</select>
+        </div>
+        <p class="inline-tip" style="flex:1;margin:0 0 4px;">GET/HEAD 不发送请求体；其余方法发送下面的消息体。</p>
+      </div>
+      <label>自定义请求头（JSON 格式，可选）</label>
+      <textarea id="wh-headers" rows="3" placeholder='{"Authorization": "Bearer xxx", "X-Custom": "1"}'>\${esc(w.headers || '')}</textarea>
+      <label>消息模板（JSON 格式，可选）</label>
+      <textarea id="wh-template" rows="6" placeholder='{"text": "「{{title}}」检测到更新，请查看：{{url}}"}'>\${esc(w.template || '')}</textarea>
+      <p class="inline-tip">模板支持占位符：<code>{{event}}</code> <code>{{url}}</code> <code>{{title}}</code> <code>{{selector}}</code> <code>{{changedAt}}</code> <code>{{previousHash}}</code> <code>{{newHash}}</code>，发送前自动替换。留空则使用下方默认格式。</p>
       <details class="tip-box">
-        <summary>查看本工具发送的数据格式</summary>
+        <summary>查看本工具发送的数据格式（未填写模板时）</summary>
         <pre>{
   "event": "website_changed",
   "monitor": { "id": "...", "name": "学校教务处通知", "url": "https://..." },
-  "changedAt": "2026-08-22T08:00:00.000Z"
+  "changedAt": "2026-08-22T08:00:00.000Z",
+  "previousHash": "旧内容哈希",
+  "newHash": "新内容哈希"
 }</pre>
-        <p class="muted">点击「发送测试」时 event 为 "test"，并附 message 字段。</p>
+        <p class="muted">点击「发送测试」时 event 为 "test"，并按当前请求方法 / 请求头 / 模板发送。</p>
       </details>
       <div class="row" style="justify-content:flex-end;margin-top:10px;">
         <button class="secondary" id="wh-test">发送测试</button>
@@ -279,7 +298,12 @@ function bindTab() {
     if (saveBtn) saveBtn.onclick = async () => {
       const msg = $('#notify-msg'); msg.innerHTML = '';
       const body = {
-        webhook: { url: $('#wh-url').value.trim() },
+        webhook: {
+          url: $('#wh-url').value.trim(),
+          method: $('#wh-method').value,
+          headers: $('#wh-headers').value.trim(),
+          template: $('#wh-template').value.trim(),
+        },
         resend: { apiKey: $('#re-key').value.trim(), from: $('#re-from').value.trim(), to: $('#re-to').value.trim() },
       };
       const r = await api('/notifications', { method:'PUT', body: JSON.stringify(body) });
@@ -297,7 +321,12 @@ function bindTab() {
         btn.disabled = true; btn.textContent = '测试中…';
         const body = {
           type,
-          webhook: { url: $('#wh-url').value.trim() },
+          webhook: {
+            url: $('#wh-url').value.trim(),
+            method: $('#wh-method').value,
+            headers: $('#wh-headers').value.trim(),
+            template: $('#wh-template').value.trim(),
+          },
           resend: { apiKey: $('#re-key').value.trim(), from: $('#re-from').value.trim(), to: $('#re-to').value.trim() },
         };
         const r = await api('/notifications/test', { method:'POST', body: JSON.stringify(body) });

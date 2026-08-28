@@ -122,12 +122,19 @@ api.get('/notifications', async (c) => {
     .bind(user)
     .all<NotificationRow>();
 
-  let webhook: { url: string } | null = null;
+  let webhook: { url: string; method: string; headers: string; template: string } | null = null;
   let resend: { from: string; to: string; hasKey: boolean; keyMasked: string } | null = null;
 
   for (const row of results ?? []) {
     const cfg = JSON.parse(row.config);
-    if (row.type === 'webhook' && cfg.url) webhook = { url: cfg.url };
+    if (row.type === 'webhook' && cfg.url) {
+      webhook = {
+        url: cfg.url,
+        method: cfg.method || 'POST',
+        headers: cfg.headers || '',
+        template: cfg.template || '',
+      };
+    }
     if (row.type === 'resend') {
       resend = {
         from: cfg.from || '',
@@ -146,11 +153,31 @@ api.put('/notifications', async (c) => {
   if (!body) return c.json({ error: '请求体无效' }, 400);
   const now = Date.now();
 
-  // Webhook
+  // Webhook（URL / 请求方法 / 自定义请求头 / 消息模板）
   const webhookUrl = body.webhook?.url ? String(body.webhook.url).trim() : '';
+  const webhookMethod = body.webhook?.method ? String(body.webhook.method).trim().toUpperCase() : 'POST';
+  const WEBHOOK_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  if (!WEBHOOK_METHODS.includes(webhookMethod)) {
+    return c.json({ error: `请求方法必须是 ${WEBHOOK_METHODS.join(' / ')}` }, 400);
+  }
+  const webhookHeaders = body.webhook?.headers ? String(body.webhook.headers).trim() : '';
+  const webhookTemplate = body.webhook?.template ? String(body.webhook.template).trim() : '';
+  if (webhookHeaders) {
+    try {
+      const h = JSON.parse(webhookHeaders);
+      if (!h || typeof h !== 'object' || Array.isArray(h)) throw new Error();
+    } catch {
+      return c.json({ error: '自定义请求头必须是 JSON 对象，例如 {"Authorization": "Bearer xxx"}' }, 400);
+    }
+  }
   if (webhookUrl) {
     if (!/^https?:\/\/.+/i.test(webhookUrl)) return c.json({ error: 'Webhook 地址必须以 http:// 或 https:// 开头' }, 400);
-    await upsertNotification(c, user, 'webhook', JSON.stringify({ url: webhookUrl }), now);
+    await upsertNotification(c, user, 'webhook', JSON.stringify({
+      url: webhookUrl,
+      method: webhookMethod,
+      headers: webhookHeaders || null,
+      template: webhookTemplate || null,
+    }), now);
   } else if (body.webhook && body.webhook.url === '') {
     await c.env.DB.prepare('DELETE FROM notification_settings WHERE user_id = ? AND type = ?')
       .bind(user, 'webhook')
@@ -218,7 +245,10 @@ api.post('/notifications/test', async (c) => {
   if (type === 'webhook') {
     const url = body.webhook?.url ? String(body.webhook.url).trim() : (savedWebhook?.url || '');
     if (!url) return c.json({ error: '请先填写 Webhook 地址' }, 400);
-    webhook = { url };
+    const method = body.webhook?.method ? String(body.webhook.method).trim().toUpperCase() : (savedWebhook?.method || 'POST');
+    const headers = body.webhook?.headers !== undefined ? String(body.webhook.headers).trim() : (savedWebhook?.headers || '');
+    const template = body.webhook?.template !== undefined ? String(body.webhook.template).trim() : (savedWebhook?.template || '');
+    webhook = { url, method, headers, template };
   } else {
     const from = body.resend?.from ? String(body.resend.from).trim() : (savedResend?.from || '');
     const to = body.resend?.to ? String(body.resend.to).trim() : (savedResend?.to || '');

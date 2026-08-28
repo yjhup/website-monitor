@@ -204,52 +204,71 @@ git push -u origin main
 1. **登录**：使用 `USERS` 中配置的任一用户名/密码登录（不同用户的数据完全隔离）
 2. **添加监测目标**：点击「＋ 添加监测」→ 填写名称、网址、检查间隔（可自定义，如 60 分钟）
    - 可选填写 **CSS 选择器**：只监测页面某一部分（如 `.notice-list`），可有效避免整页动态元素导致的误报
-3. **配置通知**：「通知设置」→ 填写 Webhook 地址 和/或 Resend 邮箱信息
-   - Webhook：网站变化时向该地址发送 `POST`，JSON 内容示例：
-
-     ```json
-     {
-       "event": "website_changed",
-       "monitor": { "id": "...", "name": "学校教务处通知", "url": "https://..." },
-       "changedAt": "2026-08-22T08:00:00.000Z"
-     }
-     ```
-
+3. **配置通知**：「通知设置」→ 配置 Webhook 和/或 Resend
+   - Webhook：可配置 **通知 URL、请求方法、自定义请求头（JSON，可选）、消息模板（JSON，可选）**。网站变化时按配置发送请求；未填模板时发送默认数据格式（见下方「Webhook 配置说明」）
    - Resend：在 [resend.com](https://resend.com) 注册后创建 API Key（`re_xxx`），并**验证你的发件域名**（添加 DNS 记录），发件邮箱需使用该域名下的地址；收件邮箱可填多个（逗号分隔）
 4. **测试通知**：填好 Webhook / Resend 配置后，点击对应卡片里的「发送测试」，立即向该地址/邮箱发送一条测试通知。成功显示绿色提示；失败会给出具体原因（如 `Webhook 返回 HTTP 404`、Resend 返回的错误信息）。测试后记得点「保存通知设置」。
 5. **手动检查**：点击某目标行中的「检查」，立即触发一次抓取对比，无需等待定时任务
 
 ## 🔌 Webhook 配置说明（对接你自己的接口）
 
-**本工具发送的数据格式是固定的**（变化时）：
+「通知设置」里的 Webhook 共有四项配置：
+
+| 配置项 | 说明 |
+|---|---|
+| **Webhook 通知 URL** | 接收通知的地址，支持 `http://` / `https://` |
+| **请求方法** | `GET` / `POST` / `PUT` / `PATCH` / `DELETE`，默认 `POST`；GET/HEAD 不发送请求体 |
+| **自定义请求头（JSON，可选）** | 以 JSON 对象添加/覆盖请求头，例如 `{"Authorization": "Bearer xxx", "X-Custom": "1"}` |
+| **消息模板（JSON，可选）** | 自定义请求体；支持占位符，发送前自动替换；留空则使用默认格式 |
+
+**消息模板支持的占位符**（直接写进模板就会被替换）：
+
+| 占位符 | 含义 |
+|---|---|
+| `{{event}}` | 事件类型：`website_changed`（检测到变化）/ `test`（发送测试） |
+| `{{url}}` | 被监测的网址 |
+| `{{title}}` | 监测目标名称 |
+| `{{selector}}` | CSS 选择器（未填则为空） |
+| `{{changedAt}}` | 检测到变化的时间（ISO 格式） |
+| `{{previousHash}}` | 变化前的内容哈希 |
+| `{{newHash}}` | 变化后的内容哈希 |
+
+**未填模板时发送的默认数据格式**：
 
 ```json
 {
   "event": "website_changed",
   "monitor": { "id": "...", "name": "学校教务处通知", "url": "https://..." },
-  "changedAt": "2026-08-22T08:00:00.000Z"
+  "changedAt": "2026-08-22T08:00:00.000Z",
+  "previousHash": "旧内容哈希",
+  "newHash": "新内容哈希"
 }
 ```
 
-点击「发送测试」时发送：
+**示例：对接 `{to, subject, text}` 这类接口（例如你之前发的 Vercel 示例）**
+
+直接在「消息模板」里写目标接口期望的 JSON，用占位符填值即可，**不需要再写转换中间件**：
 
 ```json
 {
-  "event": "test",
-  "message": "这是一条测试通知，说明你的 Webhook 配置正确。",
-  "changedAt": "2026-08-22T08:00:00.000Z"
+  "to": "boss@example.com",
+  "subject": "「{{title}}」检测到更新",
+  "text": "网页 {{url}} 于 {{changedAt}} 发生变化，请查看。"
 }
 ```
 
-**如果我要对接的接口期望的是别的字段（例如 `{"to":"boss@example.com","subject":"订单通知","text":"..."}`），该怎么配置？**
+请求方法选 `POST`（默认），点「发送测试」即可验证。若目标接口需要鉴权，在「自定义请求头」里填：
 
-本工具不能直接改成任意格式，但在中间加一层“转换”即可：收到本工具发来的 JSON 后，重新拼成目标接口需要的字段再转发。下面用 Vercel Serverless Function 演示（同样适用于 Cloudflare Worker 或任何 Node 服务）：
+```json
+{ "Authorization": "Bearer 你的Token" }
+```
+
+**如果目标接口格式非常复杂（嵌套结构、数组、动态计算等）**，模板写起来较麻烦，仍可以在中间加一层“转换”服务：本工具 → 转换层 → 目标接口。下面用 Vercel Serverless Function 演示（同样适用于 Cloudflare Worker 或任何 Node 服务）：
 
 ```js
-// 例如保存为 vercel/api/webhook.js，部署到 Vercel 后填入得到的地址
+// 例如保存为 vercel/api/webhook.js，部署到 Vercel 后把「Webhook 通知 URL」填成它的地址
 export default async function handler(req) {
   const { event, monitor, changedAt } = JSON.parse(req.body);
-  // 目标接口期望的格式（示例：按你的接口字段拼装）
   await fetch('https://<your-domain>.vercel.app/api/你真实的接口地址', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -263,7 +282,7 @@ export default async function handler(req) {
 }
 ```
 
-把「Webhook 地址」填成转换层地址（如 `https://<your-domain>.vercel.app/api/webhook`）即可。常用接收端速查：
+常用接收端速查：
 
 - **钉钉 / 企业微信 / 飞书机器人**：直接把机器人 Webhook 地址填进来即可（飞书机器人需先建群，在设置里添加自定义机器人）
 - **webhook.site / request.bin**：填地址后打开页面即可看到收到的 JSON，适合调试
@@ -287,7 +306,7 @@ A：确认在 Resend 后台已验证发件域名，发件邮箱必须是该域�
 A：修改 `USERS` 环境变量（重新设置 Secret 并重新部署）即可，用户无需单独建库。
 
 **Q：Webhook 收不到通知？**
-A：先点「检查」手动触发一次，确认目标 URL 能正常抓取；再确认 Webhook 地址公网可达、能接收 POST JSON。
+A：先点「检查」手动触发一次，确认目标 URL 能正常抓取；再确认 Webhook 地址公网可达、请求方法匹配（GET 无请求体）、自定义请求头/模板里的 JSON 是合法的，并用「发送测试」查看具体报错。
 
 ## 📄 License
 

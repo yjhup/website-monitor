@@ -43,6 +43,12 @@ export interface NotificationRow {
 
 export interface WebhookConfig {
   url: string;
+  /** 请求方法：GET / POST / PUT / PATCH / DELETE，默认 POST */
+  method?: string;
+  /** 自定义请求头（JSON 对象字符串，可选），如 {"Authorization":"Bearer xxx"} */
+  headers?: string;
+  /** 消息模板（JSON 字符串，可选），支持 {{url}} {{title}} 等占位符 */
+  template?: string;
 }
 
 export interface ResendConfig {

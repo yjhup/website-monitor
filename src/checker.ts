@@ -15,6 +15,68 @@ export interface TestResult {
   error?: string;
 }
 
+const WEBHOOK_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
+
+/** 消息模板占位符值 */
+function webhookValues(monitor: MonitorRow, event: string, newHash?: string): Record<string, string> {
+  return {
+    event,
+    url: monitor.url,
+    title: monitor.name,
+    name: monitor.name,
+    selector: monitor.selector || '',
+    changedAt: new Date().toISOString(),
+    previousHash: monitor.last_hash || '',
+    newHash: newHash || '',
+  };
+}
+
+/** 渲染消息模板：替换 {{占位符}}，未知占位符原样保留 */
+function renderTemplate(tpl: string, values: Record<string, string>): string {
+  return tpl.replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (m, key) =>
+    key in values ? values[key] : m
+  );
+}
+
+/** 校验并返回 Webhook 请求方法，非法时回退 POST */
+function webhookMethod(cfg: WebhookConfig): string {
+  const m = (cfg.method || 'POST').toUpperCase();
+  return (WEBHOOK_METHODS as readonly string[]).includes(m) ? m : 'POST';
+}
+
+/** 构建 Webhook 请求头（默认 + 自定义覆盖；非法 JSON 会抛出） */
+function buildWebhookHeaders(cfg: WebhookConfig): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': 'WebsiteMonitor/1.0',
+  };
+  if (cfg.headers && cfg.headers.trim()) {
+    const parsed = JSON.parse(cfg.headers);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('自定义请求头必须是 JSON 对象，例如 {"Authorization": "Bearer xxx"}');
+    }
+    for (const [k, v] of Object.entries(parsed)) headers[k] = String(v);
+  }
+  return headers;
+}
+
+/** 构建 Webhook 请求体；GET/HEAD 无请求体；有模板则按模板渲染，否则用默认数据格式 */
+function buildWebhookBody(cfg: WebhookConfig, monitor: MonitorRow, event: string, newHash?: string): string | undefined {
+  const method = webhookMethod(cfg);
+  if (method === 'GET' || method === 'HEAD') return undefined;
+  if (cfg.template && cfg.template.trim()) {
+    return renderTemplate(cfg.template, webhookValues(monitor, event, newHash));
+  }
+  const v = webhookValues(monitor, event, newHash);
+  return JSON.stringify({
+    event: v.event,
+    monitor: { id: monitor.id, name: monitor.name, url: monitor.url, selector: monitor.selector },
+    changedAt: v.changedAt,
+    previousHash: v.previousHash || null,
+    newHash: v.newHash || null,
+  });
+}
+
 /** 发送一条“测试通知”，校验 Webhook / Resend 配置是否可用（返回详细错误） */
 export async function sendTestNotification(
   type: 'webhook' | 'resend',
@@ -22,21 +84,28 @@ export async function sendTestNotification(
 ): Promise<TestResult> {
   try {
     if (type === 'webhook') {
-      const url = cfg.webhook?.url;
+      const w = cfg.webhook;
+      const url = w?.url;
       if (!url) return { ok: false, error: '请先填写 Webhook 地址' };
-      const payload = {
-        event: 'test',
-        message: '这是一条测试通知，说明你的 Webhook 配置正确。',
-        changedAt: new Date().toISOString(),
+      const fakeMonitor: MonitorRow = {
+        id: 'test', user_id: '', name: '测试监测目标', url: 'https://example.com',
+        selector: null, interval_minutes: 60, last_checked_at: 0, last_change_at: null,
+        last_hash: null, enabled: 1, created_at: 0,
       };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'WebsiteMonitor/1.0' },
-        body: JSON.stringify(payload),
-      });
+      let headers: Record<string, string>;
+      let body: string | undefined;
+      try {
+        headers = buildWebhookHeaders(w!);
+        body = buildWebhookBody(w!, fakeMonitor, 'test');
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+      const init: RequestInit = { method: webhookMethod(w!), headers };
+      if (body !== undefined) init.body = body;
+      const res = await fetch(url, init);
       if (!res.ok) {
-        const body = await res.text().catch(() => '');
-        return { ok: false, error: `Webhook 返回 HTTP ${res.status}${body ? '：' + body.slice(0, 200) : ''}` };
+        const bodyText = await res.text().catch(() => '');
+        return { ok: false, error: `Webhook 返回 HTTP ${res.status}${bodyText ? '：' + bodyText.slice(0, 200) : ''}` };
       }
       return { ok: true };
     }
@@ -128,7 +197,7 @@ export async function checkMonitor(env: Env, monitor: MonitorRow): Promise<Check
     let changed = false;
     if (prev && prev !== hash) {
       changed = true;
-      await notifyAll(env, monitor);
+      await notifyAll(env, monitor, hash);
       await env.DB.prepare(
         'UPDATE monitors SET last_checked_at = ?, last_change_at = ?, last_hash = ? WHERE id = ?'
       )
@@ -168,7 +237,7 @@ export async function checkDueMonitors(env: Env): Promise<void> {
   }
 }
 
-async function notifyAll(env: Env, monitor: MonitorRow): Promise<void> {
+async function notifyAll(env: Env, monitor: MonitorRow, newHash?: string): Promise<void> {
   const { results } = await env.DB.prepare(
     'SELECT * FROM notification_settings WHERE user_id = ?'
   ).bind(monitor.user_id).all<NotificationRow>();
@@ -176,7 +245,7 @@ async function notifyAll(env: Env, monitor: MonitorRow): Promise<void> {
   for (const row of results ?? []) {
     try {
       const cfg = JSON.parse(row.config);
-      if (row.type === 'webhook') await sendWebhook(cfg as WebhookConfig, monitor);
+      if (row.type === 'webhook') await sendWebhook(cfg as WebhookConfig, monitor, newHash);
       if (row.type === 'resend') await sendResend(cfg as ResendConfig, monitor);
     } catch (e) {
       console.error(`send ${row.type} notification failed for monitor ${monitor.id}`, e);
@@ -190,24 +259,16 @@ function escapeHtml(s: string): string {
   );
 }
 
-/** Webhook：POST JSON 到用户配置的 URL */
-async function sendWebhook(cfg: WebhookConfig, monitor: MonitorRow): Promise<void> {
+/** Webhook：按配置的请求方法 / 请求头 / 消息模板发送（GET/HEAD 无请求体） */
+async function sendWebhook(cfg: WebhookConfig, monitor: MonitorRow, newHash?: string): Promise<void> {
   if (!cfg.url) return;
-  const payload = {
-    event: 'website_changed',
-    monitor: {
-      id: monitor.id,
-      name: monitor.name,
-      url: monitor.url,
-      selector: monitor.selector,
-    },
-    changedAt: new Date().toISOString(),
+  const init: RequestInit = {
+    method: webhookMethod(cfg),
+    headers: buildWebhookHeaders(cfg),
   };
-  await fetch(cfg.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'WebsiteMonitor/1.0' },
-    body: JSON.stringify(payload),
-  });
+  const body = buildWebhookBody(cfg, monitor, 'website_changed', newHash);
+  if (body !== undefined) init.body = body;
+  await fetch(cfg.url, init);
 }
 
 /** Resend：发送 HTML 邮件 */
